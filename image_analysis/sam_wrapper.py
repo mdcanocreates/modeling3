@@ -1,11 +1,13 @@
 """
-Segment Anything Model (SAM) wrapper for cell mask refinement.
+Segment Anything Model (SAM) wrapper for cell segmentation.
 
 This module provides integration with Meta's Segment Anything Model (SAM)
-for refining cell masks when Gemini QC flags poor-quality segmentation.
+for primary cell segmentation. SAM is used as the main segmentation method
+due to its robustness to varying image quality and minimal parameter tuning.
 
-SAM is used as a fallback/refinement step, not as a replacement for the
-main actin/nuclei segmentation pipeline.
+The module provides two main functions:
+1. sam_segment_cell(): Primary cell segmentation using SAM
+2. refine_cell_mask_with_sam(): Optional refinement of existing masks
 
 Requirements:
 - PyTorch
@@ -13,8 +15,8 @@ Requirements:
 - segment-anything package (from local repo)
 
 Usage:
-    The pipeline automatically calls SAM when Gemini flags a low-quality mask.
     Set SAM_CHECKPOINT_PATH environment variable to point to your model file.
+    The pipeline automatically uses SAM for cell segmentation.
 """
 
 import os
