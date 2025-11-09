@@ -30,6 +30,7 @@ from image_analysis.plotting import (
     plot_combo_with_masks, plot_actin_with_cell_mask, plot_nuclei_with_nuclear_mask
 )
 from image_analysis.sam_wrapper import sam_segment_cell
+from image_analysis.gemini_qc import evaluate_segmentation_with_gemini
 
 
 def process_cell_final(
@@ -177,6 +178,40 @@ def process_cell_final(
         output_path=str(combo_path_qc)
     )
     
+    # Step 5: Optional Gemini QC evaluation
+    print(f"  Running Gemini QC evaluation (optional)...")
+    try:
+        # Get raw nuclei image path
+        filename_prefix = CELL_ID_TO_PREFIX.get(cell_id, cell_id)
+        raw_nuclei_path = data_root / cell_id / f"{filename_prefix}_Nuclei.jpg"
+        if not raw_nuclei_path.exists():
+            raw_nuclei_path = data_root / cell_id / f"{cell_id}_Nuclei.jpg"
+        
+        if raw_nuclei_path.exists():
+            qc_result = evaluate_segmentation_with_gemini(
+                cell_id=cell_id,
+                raw_image_path=str(raw_nuclei_path),
+                overlay_image_path=str(nuclei_path_qc),
+                channel="nuclei"
+            )
+            
+            # Log QC results
+            cell_score = qc_result.get('cell_mask_score')
+            nucleus_score = qc_result.get('nucleus_mask_score')
+            
+            if cell_score is not None:
+                print(f"    Cell mask score: {cell_score:.2f}")
+            if nucleus_score is not None:
+                print(f"    Nuclear mask score: {nucleus_score:.2f}")
+            
+            # Store QC result in metrics for later saving
+            metrics['_gemini_qc'] = qc_result
+        else:
+            print(f"    Warning: Raw nuclei image not found, skipping Gemini QC")
+    except Exception as e:
+        print(f"    Warning: Gemini QC failed: {e}")
+        metrics['_gemini_qc'] = None
+    
     print(f"  Completed {cell_id}")
     
     return metrics
@@ -273,12 +308,44 @@ It uses SAM-first segmentation for cells and classical methods for nuclei.
             traceback.print_exc()
             sys.exit(1)
     
-    # Save metrics to CSV
+    # Save metrics to CSV (exclude Gemini QC from CSV)
     if all_metrics:
-        df = pd.DataFrame(all_metrics)
+        # Separate Gemini QC results
+        all_gemini_qc = []
+        metrics_clean = []
+        
+        for m in all_metrics:
+            qc = m.pop('_gemini_qc', None)
+            if qc:
+                all_gemini_qc.append(qc)
+            metrics_clean.append(m)
+        
+        df = pd.DataFrame(metrics_clean)
         metrics_csv = output_root / "final_metrics.csv"
         df.to_csv(metrics_csv, index=False)
         print(f"\nMetrics saved to {metrics_csv}")
+        
+        # Save Gemini QC results if available
+        if all_gemini_qc:
+            import json
+            qc_json = output_root / "gemini_qc_results.json"
+            with open(qc_json, 'w') as f:
+                json.dump(all_gemini_qc, f, indent=2)
+            print(f"Gemini QC results saved to {qc_json}")
+            
+            # Create summary CSV
+            qc_summary = []
+            for qc in all_gemini_qc:
+                qc_summary.append({
+                    'cell_id': qc.get('cell_id', ''),
+                    'channel': qc.get('channel', ''),
+                    'cell_mask_score': qc.get('cell_mask_score'),
+                    'nucleus_mask_score': qc.get('nucleus_mask_score')
+                })
+            qc_df = pd.DataFrame(qc_summary)
+            qc_csv = output_root / "gemini_qc_summary.csv"
+            qc_df.to_csv(qc_csv, index=False)
+            print(f"Gemini QC summary saved to {qc_csv}")
     
     # Perform similarity analysis
     if len(all_metrics) >= 2:

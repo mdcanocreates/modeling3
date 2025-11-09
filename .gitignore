@@ -28,6 +28,9 @@ final_outputs/
 *.json
 *.html
 
+# Note: segment-anything-main/segment_anything/ is REQUIRED
+# segment-anything-main/assets/ is NOT required (demo images only)
+
 # SAM checkpoint (too large)
 *.pth
 sam_vit_b_01ec64.pth
