@@ -80,20 +80,24 @@ def generate_results_dashboard(
     
     print(f"Plotting metrics: {', '.join(available_metrics)}")
     
-    # Set up figure: 3 rows (cells) × 2 columns (image, bar plot)
+    # Set up figure: 3 rows (cells) × 4 columns (image, cell_area, other metrics)
     n_cells = len(cell_ids)
-    fig, axes = plt.subplots(n_cells, 2, figsize=(14, 4 * n_cells))
-    
-    # Handle case where only one cell
-    if n_cells == 1:
-        axes = axes.reshape(1, -1)
+    fig = plt.figure(figsize=(18, 5 * n_cells))
     
     overlay_dir_path = Path(overlay_dir)
     
+    # Separate cell_area from other metrics
+    if 'cell_area' in available_metrics:
+        area_metrics = ['cell_area']
+        other_metrics = [m for m in available_metrics if m != 'cell_area']
+    else:
+        area_metrics = []
+        other_metrics = available_metrics
+    
     # Process each cell
     for i, cell_id in enumerate(cell_ids):
-        # Left: Load and display overlay image
-        ax_img = axes[i, 0]
+        # Left column: Load and display overlay image
+        ax_img = plt.subplot2grid((n_cells, 4), (i, 0), colspan=1)
         
         # Build overlay image path
         overlay_path = overlay_dir_path / f"{cell_id}_actin_with_cell_mask.png"
@@ -114,44 +118,74 @@ def generate_results_dashboard(
         
         ax_img.axis('off')
         
-        # Right: Bar plot of metrics
-        ax_bar = axes[i, 1]
-        
         # Get metrics for this cell
         cell_row = df[df['cell_id'] == cell_id].iloc[0]
-        metric_values = [cell_row[m] for m in available_metrics]
         
-        # Create bar plot
-        x_pos = np.arange(len(available_metrics))
-        bars = ax_bar.bar(x_pos, metric_values, alpha=0.7, color='steelblue')
-        
-        # Customize plot
-        ax_bar.set_xticks(x_pos)
-        ax_bar.set_xticklabels(available_metrics, rotation=45, ha='right')
-        ax_bar.set_ylabel('Value', fontsize=10)
-        ax_bar.set_title(f"{cell_id} Metrics", fontsize=12, fontweight='bold')
-        ax_bar.grid(axis='y', alpha=0.3, linestyle='--')
-        
-        # Add value labels on bars
-        for j, (bar, val) in enumerate(zip(bars, metric_values)):
-            height = bar.get_height()
-            # Format value based on magnitude
-            if abs(val) < 0.01:
-                label = f'{val:.4f}'
-            elif abs(val) < 1:
-                label = f'{val:.3f}'
-            elif abs(val) < 1000:
-                label = f'{val:.1f}'
-            else:
-                label = f'{val:.0f}'
+        # Column 2: Cell area (if present)
+        if area_metrics:
+            ax_area = plt.subplot2grid((n_cells, 4), (i, 1), colspan=1)
+            area_values = [cell_row[m] / 1000.0 for m in area_metrics]  # Convert to ×10³
+            x_pos_area = np.arange(len(area_metrics))
+            bars_area = ax_area.bar(x_pos_area, area_values, alpha=0.7, color='steelblue')
             
-            ax_bar.text(bar.get_x() + bar.get_width()/2., height,
-                       label, ha='center', va='bottom', fontsize=8)
+            ax_area.set_xticks(x_pos_area)
+            ax_area.set_xticklabels(['Cell area\n(×10³ pixels)'], rotation=0, ha='center', fontsize=9)
+            ax_area.set_ylabel('Value', fontsize=9)
+            if i == 0:
+                ax_area.set_title("Cell Area", fontsize=11, fontweight='bold')
+            ax_area.grid(axis='y', alpha=0.3, linestyle='--')
+            
+            # Add value labels
+            for bar, val in zip(bars_area, area_values):
+                height = bar.get_height()
+                label = f'{val:.1f}'
+                ax_area.text(bar.get_x() + bar.get_width()/2., height,
+                           label, ha='center', va='bottom', fontsize=8)
+            
+            # Set y-axis limits
+            y_max_area = max(area_values) * 1.2 if area_values else 1
+            ax_area.set_ylim(0, y_max_area)
         
-        # Set y-axis limits with some padding
-        y_max = max(metric_values) * 1.2 if metric_values else 1
-        y_min = min(0, min(metric_values) * 1.1) if metric_values else 0
-        ax_bar.set_ylim(y_min, y_max)
+        # Columns 3-4: Other metrics
+        if other_metrics:
+            ax_other = plt.subplot2grid((n_cells, 4), (i, 2), colspan=2)
+            other_values = [cell_row[m] for m in other_metrics]
+            x_pos_other = np.arange(len(other_metrics))
+            bars_other = ax_other.bar(x_pos_other, other_values, alpha=0.7, color='steelblue')
+            
+            ax_other.set_xticks(x_pos_other)
+            ax_other.set_xticklabels(other_metrics, rotation=45, ha='right', fontsize=9)
+            ax_other.set_ylabel('Value', fontsize=9)
+            if i == 0:
+                ax_other.set_title("Other Metrics", fontsize=11, fontweight='bold')
+            ax_other.grid(axis='y', alpha=0.3, linestyle='--')
+            
+            # Add value labels
+            for j, (bar, val) in enumerate(zip(bars_other, other_values)):
+                height = bar.get_height()
+                # Format value based on magnitude
+                if abs(val) < 0.01:
+                    label = f'{val:.4f}'
+                elif abs(val) < 1:
+                    label = f'{val:.3f}'
+                elif abs(val) < 1000:
+                    label = f'{val:.2f}'
+                else:
+                    label = f'{val:.0f}'
+                
+                ax_other.text(bar.get_x() + bar.get_width()/2., height,
+                           label, ha='center', va='bottom', fontsize=7)
+            
+            # Set y-axis limits
+            y_max_other = max(other_values) * 1.2 if other_values else 1
+            y_min_other = min(0, min(other_values) * 1.1) if other_values else 0
+            ax_other.set_ylim(y_min_other, y_max_other)
+        
+        # If no metrics, show message
+        if not area_metrics and not other_metrics:
+            ax_other = plt.subplot2grid((n_cells, 4), (i, 1), colspan=3)
+            ax_other.text(0.5, 0.5, 'No metrics available', 
+                         ha='center', va='center', transform=ax_other.transAxes)
     
     plt.tight_layout()
     

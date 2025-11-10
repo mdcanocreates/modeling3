@@ -24,7 +24,7 @@ import sys
 from typing import Optional, List, Tuple
 from pathlib import Path
 import numpy as np
-from skimage import io, color
+from skimage import io, color, morphology
 from skimage.morphology import remove_small_objects
 from scipy import ndimage
 
@@ -294,10 +294,11 @@ def sam_segment_cell(
     
     h, w = image.shape[:2]
     
-    # Step 1: Estimate bounding box
+    # Step 1: Derive rough nuclei mask and tight ROI
     box = None
     positive_points = []
     negative_points = []
+    rough_nuclei = None
     
     if nuclei_image_path and Path(nuclei_image_path).exists():
         # Use nuclei to estimate bounding box
@@ -314,33 +315,47 @@ def sam_segment_cell(
         if nuclei_image.max() > 1.0:
             nuclei_image = nuclei_image.astype(np.float32) / 255.0
         
-        # Simple thresholding to get rough nuclei mask
+        # Get rough nuclei mask: Gaussian or median blur + threshold
         from scipy import ndimage
-        nuclei_blurred = ndimage.gaussian_filter(nuclei_image, sigma=1.5)
-        nuclei_threshold = np.percentile(nuclei_blurred, 85)
+        from skimage import filters
+        from skimage.morphology import remove_small_objects
+        from skimage.measure import label, regionprops
+        
+        # Try median filter first, then Gaussian
+        try:
+            nuclei_blurred = filters.median(nuclei_image, footprint=morphology.disk(3))
+        except:
+            nuclei_blurred = ndimage.gaussian_filter(nuclei_image, sigma=1.5)
+        
+        # Try Otsu threshold, fallback to percentile
+        try:
+            nuclei_threshold = filters.threshold_otsu(nuclei_blurred)
+        except:
+            nuclei_threshold = np.percentile(nuclei_blurred, 85)
+        
         nuclei_binary = nuclei_blurred > nuclei_threshold
         
-        # Remove small objects
-        from skimage.morphology import remove_small_objects
-        nuclei_binary = remove_small_objects(nuclei_binary, min_size=50)
+        # Remove small objects (min_size=200 for rough nuclei)
+        nuclei_binary = remove_small_objects(nuclei_binary, min_size=200)
         
-        # Get bounding box of nuclei
-        from skimage.measure import label, regionprops
+        # Get largest connected component as rough_nuclei
         labeled_nuclei = label(nuclei_binary)
         if labeled_nuclei.max() > 0:
             regions = regionprops(labeled_nuclei)
             if regions:
-                # Get bounding box of all nuclei
-                min_row = min(r.bbox[0] for r in regions)
-                min_col = min(r.bbox[1] for r in regions)
-                max_row = max(r.bbox[2] for r in regions)
-                max_col = max(r.bbox[3] for r in regions)
+                # Find largest component
+                largest_region = max(regions, key=lambda r: r.area)
+                rough_nuclei = (labeled_nuclei == largest_region.label)
                 
-                # Expand bounding box by margin
-                min_row = max(0, min_row - box_margin)
-                min_col = max(0, min_col - box_margin)
-                max_row = min(h, max_row + box_margin)
-                max_col = min(w, max_col + box_margin)
+                # Get bounding box of largest component
+                min_row, min_col, max_row, max_col = largest_region.bbox
+                
+                # Expand bounding box by margin (80-120 pixels)
+                margin = min(box_margin, 120)
+                min_row = max(0, min_row - margin)
+                min_col = max(0, min_col - margin)
+                max_row = min(h, max_row + margin)
+                max_col = min(w, max_col + margin)
                 
                 box = np.array([min_col, min_row, max_col, max_row])  # SAM expects (x1, y1, x2, y2)
                 
@@ -539,34 +554,69 @@ def sam_segment_cell(
         # Fallback: return empty mask
         return np.zeros((h, w), dtype=bool)
     
-    # Step 6: Post-processing
+    # Step 6: Post-processing - keep only component overlapping nuclei
     from skimage.morphology import disk, binary_closing, binary_opening
+    from skimage.measure import label, regionprops
     
-    # Remove small objects
+    # Remove small objects first
     best_mask = remove_small_objects(best_mask, min_size=min_mask_area)
     
-    # Smooth edges
+    # If we have rough_nuclei, keep only component with maximum overlap
+    if rough_nuclei is not None and np.any(rough_nuclei):
+        labeled_mask = label(best_mask)
+        if labeled_mask.max() > 0:
+            regions = regionprops(labeled_mask)
+            if regions:
+                # Find component with maximum overlap with rough_nuclei
+                max_overlap = -1
+                best_component_label = None
+                
+                for region in regions:
+                    # Get mask for this component
+                    component_mask = (labeled_mask == region.label)
+                    # Compute overlap
+                    overlap = np.sum(component_mask & rough_nuclei)
+                    if overlap > max_overlap:
+                        max_overlap = overlap
+                        best_component_label = region.label
+                
+                # Keep only the best component
+                if best_component_label is not None:
+                    best_mask = (labeled_mask == best_component_label)
+                else:
+                    # Fallback: keep largest component
+                    largest = max(regions, key=lambda r: r.area)
+                    best_mask = (labeled_mask == largest.label)
+    
+    # Morphological smoothing
     best_mask = binary_closing(best_mask, disk(5))
     best_mask = binary_opening(best_mask, disk(3))
     
     # Fill holes
     best_mask = ndimage.binary_fill_holes(best_mask)
     
-    # Ensure mask doesn't touch pure-black bands at top/bottom
-    # Check top 10% and bottom 10% of image
-    if actin_gray is not None:
-        top_band = actin_gray[:h//10, :].mean()
-        bottom_band = actin_gray[-h//10:, :].mean()
+    # Optional: single erosion to avoid grabbing ambiguous periphery
+    from skimage.morphology import binary_erosion
+    best_mask = binary_erosion(best_mask, disk(1))
+    # Re-fill after erosion
+    best_mask = ndimage.binary_fill_holes(best_mask)
+    
+    # Remove top/bottom pure-background bands explicitly
+    band_size = int(0.05 * h)  # 5% of image height
+    if band_size > 0:
+        # Check top band
+        top_band_mask = best_mask[:band_size, :]
+        top_band_ratio = np.sum(top_band_mask) / (band_size * w) if (band_size * w) > 0 else 0
         
-        if top_band < 0.1:  # Very dark top band
-            # Remove mask if it touches top
-            if best_mask[:h//10, :].any():
-                best_mask[:h//10, :] = False
+        if top_band_ratio > 0.2:  # More than 20% of mask in top band
+            best_mask[:band_size, :] = False
         
-        if bottom_band < 0.1:  # Very dark bottom band
-            # Remove mask if it touches bottom
-            if best_mask[-h//10:, :].any():
-                best_mask[-h//10:, :] = False
+        # Check bottom band
+        bottom_band_mask = best_mask[-band_size:, :]
+        bottom_band_ratio = np.sum(bottom_band_mask) / (band_size * w) if (band_size * w) > 0 else 0
+        
+        if bottom_band_ratio > 0.2:  # More than 20% of mask in bottom band
+            best_mask[-band_size:, :] = False
     
     return best_mask
 

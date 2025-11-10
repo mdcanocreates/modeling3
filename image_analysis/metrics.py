@@ -288,7 +288,8 @@ def compute_orientation_order_parameter(
 
 def compute_actin_metrics(
     actin_image: np.ndarray,
-    cytoplasm_mask: np.ndarray
+    cytoplasm_mask: np.ndarray,
+    cell_mask: np.ndarray
 ) -> Tuple[float, float]:
     """
     Compute mean cytoplasmic actin intensity and actin anisotropy.
@@ -296,33 +297,62 @@ def compute_actin_metrics(
     Actin amount and organization relate to contractility, stress fibers,
     and response to mechanical cues. We want both quantity and organization.
     
+    This function now includes background normalization for accurate intensity measurements.
+    
     Parameters
     ----------
     actin_image : np.ndarray
         Grayscale Actin channel image
     cytoplasm_mask : np.ndarray
         Binary mask of the cytoplasm (cell AND NOT nucleus)
+    cell_mask : np.ndarray
+        Binary mask of the cell (for background estimation)
     
     Returns
     -------
     tuple
         (actin_mean_intensity, actin_anisotropy)
-        - actin_mean_intensity: Mean grayscale intensity within cytoplasm
+        - actin_mean_intensity: Mean background-normalized intensity within cytoplasm (0 to 1)
         - actin_anisotropy: Orientation order parameter (0 to 1)
     """
     # Normalize image to 0-1 range if needed
     if actin_image.max() > 1.0:
         actin_image = actin_image.astype(np.float32) / 255.0
+    else:
+        actin_image = actin_image.astype(np.float32)
     
-    # Compute mean intensity within cytoplasm
+    # Background subtraction
+    bg_mask = ~cell_mask  # Background is outside cell
+    bg_pixels = actin_image[bg_mask]
+    
+    if len(bg_pixels) > 0:
+        bg_median = np.median(bg_pixels)
+        # Subtract background
+        img_bs = np.clip(actin_image - bg_median, 0, None)
+        
+        # Normalize by 99th percentile inside cell
+        cell_pixels = img_bs[cell_mask]
+        if len(cell_pixels) > 0:
+            scale = np.percentile(cell_pixels, 99)
+            if scale > 0:
+                img_norm = np.clip(img_bs / scale, 0, 1)
+            else:
+                img_norm = img_bs
+        else:
+            img_norm = img_bs
+    else:
+        # No background pixels, use original normalized image
+        img_norm = actin_image
+    
+    # Compute mean intensity within cytoplasm (using normalized image)
     if not np.any(cytoplasm_mask):
         actin_mean_intensity = 0.0
     else:
-        actin_mean_intensity = np.mean(actin_image[cytoplasm_mask])
+        actin_mean_intensity = np.mean(img_norm[cytoplasm_mask])
     
-    # Compute anisotropy using orientation order parameter
+    # Compute anisotropy using orientation order parameter (on normalized image)
     actin_anisotropy = compute_orientation_order_parameter(
-        actin_image, cytoplasm_mask
+        img_norm, cytoplasm_mask
     )
     
     return actin_mean_intensity, actin_anisotropy
@@ -330,7 +360,8 @@ def compute_actin_metrics(
 
 def compute_microtubule_intensity(
     microtubule_image: np.ndarray,
-    cytoplasm_mask: np.ndarray
+    cytoplasm_mask: np.ndarray,
+    cell_mask: np.ndarray
 ) -> float:
     """
     Compute mean cytoplasmic microtubule intensity.
@@ -338,27 +369,56 @@ def compute_microtubule_intensity(
     Microtubule density and distribution reflect polarity, trafficking,
     and organization of the cytoskeleton.
     
+    This function now includes background normalization for accurate intensity measurements.
+    
     Parameters
     ----------
     microtubule_image : np.ndarray
         Grayscale Microtubules channel image
     cytoplasm_mask : np.ndarray
         Binary mask of the cytoplasm
+    cell_mask : np.ndarray
+        Binary mask of the cell (for background estimation)
     
     Returns
     -------
     float
-        Mean grayscale intensity in Microtubules image within cytoplasm
+        Mean background-normalized intensity in Microtubules image within cytoplasm (0 to 1)
     """
     # Normalize image to 0-1 range if needed
     if microtubule_image.max() > 1.0:
         microtubule_image = microtubule_image.astype(np.float32) / 255.0
+    else:
+        microtubule_image = microtubule_image.astype(np.float32)
     
-    # Compute mean intensity within cytoplasm
+    # Background subtraction
+    bg_mask = ~cell_mask  # Background is outside cell
+    bg_pixels = microtubule_image[bg_mask]
+    
+    if len(bg_pixels) > 0:
+        bg_median = np.median(bg_pixels)
+        # Subtract background
+        img_bs = np.clip(microtubule_image - bg_median, 0, None)
+        
+        # Normalize by 99th percentile inside cell
+        cell_pixels = img_bs[cell_mask]
+        if len(cell_pixels) > 0:
+            scale = np.percentile(cell_pixels, 99)
+            if scale > 0:
+                img_norm = np.clip(img_bs / scale, 0, 1)
+            else:
+                img_norm = img_bs
+        else:
+            img_norm = img_bs
+    else:
+        # No background pixels, use original normalized image
+        img_norm = microtubule_image
+    
+    # Compute mean intensity within cytoplasm (using normalized image)
     if not np.any(cytoplasm_mask):
         mtub_mean_intensity = 0.0
     else:
-        mtub_mean_intensity = np.mean(microtubule_image[cytoplasm_mask])
+        mtub_mean_intensity = np.mean(img_norm[cytoplasm_mask])
     
     return mtub_mean_intensity
 
@@ -422,12 +482,12 @@ def compute_all_metrics(
     
     # 6. Mean cytoplasmic actin intensity and actin anisotropy
     actin_mean_intensity, actin_anisotropy = compute_actin_metrics(
-        actin_image, cytoplasm_mask
+        actin_image, cytoplasm_mask, cell_mask
     )
     
     # 7. Mean cytoplasmic microtubule intensity
     mtub_mean_intensity = compute_microtubule_intensity(
-        microtubule_image, cytoplasm_mask
+        microtubule_image, cytoplasm_mask, cell_mask
     )
     
     metrics = {
