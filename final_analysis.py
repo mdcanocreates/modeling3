@@ -98,23 +98,38 @@ def process_cell_final(
         nuclei_path = data_root / cell_id / f"{cell_id}_Nuclei.jpg"
     
     # Step 1: Segment cell using SAM (PRIMARY METHOD)
-    print(f"  Segmenting cell using SAM...")
-    try:
-        cell_mask = sam_segment_cell(
-            image_path=str(actin_path),
-            nuclei_image_path=str(nuclei_path) if nuclei_path.exists() else None
-        )
+    # Check if manual mask exists (from UI refinement)
+    manual_mask_path = output_root / f"{cell_id}_cell_mask_manual.npy"
+    
+    if manual_mask_path.exists():
+        print(f"  Loading manually refined mask from {manual_mask_path.name}...")
+        cell_mask = np.load(manual_mask_path)
         
-        # Resize SAM mask to match normalized image dimensions
+        # Resize if needed
         if cell_mask.shape != actin_image.shape:
             from skimage.transform import resize
             cell_mask = resize(cell_mask, actin_image.shape, order=0, preserve_range=True).astype(bool)
         
         cell_area_pixels = np.sum(cell_mask)
-        print(f"    Cell area: {cell_area_pixels:.0f} pixels")
-    except Exception as e:
-        print(f"    ERROR: SAM segmentation failed: {e}")
-        raise
+        print(f"    Cell area: {cell_area_pixels:.0f} pixels (from manual mask)")
+    else:
+        print(f"  Segmenting cell using SAM...")
+        try:
+            cell_mask = sam_segment_cell(
+                image_path=str(actin_path),
+                nuclei_image_path=str(nuclei_path) if nuclei_path.exists() else None
+            )
+            
+            # Resize SAM mask to match normalized image dimensions
+            if cell_mask.shape != actin_image.shape:
+                from skimage.transform import resize
+                cell_mask = resize(cell_mask, actin_image.shape, order=0, preserve_range=True).astype(bool)
+            
+            cell_area_pixels = np.sum(cell_mask)
+            print(f"    Cell area: {cell_area_pixels:.0f} pixels")
+        except Exception as e:
+            print(f"    ERROR: SAM segmentation failed: {e}")
+            raise
     
     # Step 2: Segment nuclei from Nuclei channel using classical method (inside SAM mask)
     print(f"  Segmenting nuclei (classical method, inside SAM mask)...")
