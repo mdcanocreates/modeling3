@@ -188,7 +188,76 @@ with tab1:
         st.error(f"Actin image not found for {cell_id}")
         st.stop()
     
-    # Recompute mask button
+    # Auto-load or compute mask when cell is selected
+    # Priority: 1) Saved manual mask, 2) Session state, 3) Auto-compute with default params
+    auto_compute_needed = False
+    
+    if cell_id not in st.session_state.masks:
+        # Try to load saved manual mask first
+        manual_mask_path = output_root / f"{cell_id}_cell_mask_manual.npy"
+        if manual_mask_path.exists():
+            try:
+                saved_mask = np.load(manual_mask_path)
+                # Load actin image for display
+                from skimage import io, color
+                actin_img_raw = io.imread(paths['actin'])
+                if len(actin_img_raw.shape) == 3:
+                    actin_img = color.rgb2gray(actin_img_raw)
+                else:
+                    actin_img = actin_img_raw.copy()
+                if actin_img.max() > 1.0:
+                    actin_img = actin_img.astype(np.float32) / 255.0
+                else:
+                    actin_img = actin_img.astype(np.float32)
+                
+                st.session_state.masks[cell_id] = saved_mask
+                st.session_state.images[cell_id] = actin_img
+                st.session_state.params[cell_id] = {
+                    'margin': 150, 'dilate_radius': 8, 'close_radius': 3,
+                    'actin_percentile': 0.3, 'band_frac': 0.03, 'band_coverage': 0.4
+                }
+                st.info(f"📂 Loaded saved mask for {cell_id}")
+            except Exception as e:
+                st.warning(f"Could not load saved mask: {e}")
+                auto_compute_needed = True
+        else:
+            # No saved mask, auto-compute with default parameters
+            auto_compute_needed = True
+    
+    # Auto-compute mask if needed (only if SAM checkpoint is available)
+    if auto_compute_needed and sam_checkpoint_path and Path(sam_checkpoint_path).exists():
+        if 'auto_computed' not in st.session_state:
+            st.session_state.auto_computed = {}
+        
+        if cell_id not in st.session_state.auto_computed:
+            with st.spinner(f"Auto-computing mask for {cell_id} with default parameters..."):
+                try:
+                    result = segment_cell_with_sam(
+                        cell_id=cell_id,
+                        actin_path=paths['actin'],
+                        nuclei_path=paths['nuclei'],
+                        margin=150,  # Default values
+                        dilate_radius=8,
+                        close_radius=3,
+                        actin_percentile=0.3,
+                        band_frac=0.03,
+                        band_coverage=0.4,
+                        checkpoint_path=sam_checkpoint_path
+                    )
+                    
+                    st.session_state.masks[cell_id] = result['cell_mask']
+                    st.session_state.images[cell_id] = result['actin_img']
+                    st.session_state.params[cell_id] = {
+                        'margin': 150, 'dilate_radius': 8, 'close_radius': 3,
+                        'actin_percentile': 0.3, 'band_frac': 0.03, 'band_coverage': 0.4
+                    }
+                    st.session_state.auto_computed[cell_id] = True
+                    st.success(f"✅ Auto-computed mask for {cell_id}")
+                except Exception as e:
+                    st.warning(f"Auto-compute failed: {e}. Click 'Recompute Mask' to try again.")
+                    st.session_state.auto_computed[cell_id] = False
+    
+    # Recompute mask button (for refinement with new parameters)
     if recompute_btn:
         # Check if SAM checkpoint is available
         if not sam_checkpoint_path or not Path(sam_checkpoint_path).exists():
@@ -222,13 +291,16 @@ with tab1:
                     'band_coverage': band_coverage
                 }
                 
-                st.success(f"Mask computed for {cell_id}!")
+                st.success(f"✅ Mask recomputed for {cell_id}!")
+                # Mark as manually recomputed (not auto-computed)
+                if 'auto_computed' in st.session_state:
+                    st.session_state.auto_computed[cell_id] = False
             except Exception as e:
                 st.error(f"Error computing mask: {e}")
                 import traceback
                 st.code(traceback.format_exc())
     
-    # Display mask if available
+    # Display actin image and mask (or just actin if no mask yet)
     if cell_id in st.session_state.masks:
         mask = st.session_state.masks[cell_id]
         actin_img = st.session_state.images[cell_id]
@@ -270,9 +342,40 @@ with tab1:
                 'Value': [f"{v:.2f}" if isinstance(v, float) else str(v) for v in params.values()]
             })
             st.dataframe(params_df, use_container_width=True, hide_index=True)
+    else:
+        # Show actin image even if no mask is available yet
+        st.info("👈 No mask available yet. Click 'Recompute Mask' to generate one, or adjust parameters and recompute.")
         
-        # Save button
-        if save_btn:
+        # Display raw actin image
+        try:
+            from skimage import io, color
+            actin_img_raw = io.imread(paths['actin'])
+            if len(actin_img_raw.shape) == 3:
+                actin_img = color.rgb2gray(actin_img_raw)
+            else:
+                actin_img = actin_img_raw.copy()
+            if actin_img.max() > 1.0:
+                actin_img = actin_img.astype(np.float32) / 255.0
+            else:
+                actin_img = actin_img.astype(np.float32)
+            
+            st.subheader(f"{cell_id} - Actin Image (no mask yet)")
+            fig, ax = plt.subplots(figsize=(10, 10))
+            ax.imshow(actin_img, cmap='gray')
+            ax.axis('off')
+            st.pyplot(fig)
+            plt.close(fig)
+        except Exception as e:
+            st.warning(f"Could not load actin image: {e}")
+        
+        # Check if SAM checkpoint is missing
+        if not sam_checkpoint_path or not Path(sam_checkpoint_path).exists():
+            st.error("❌ SAM checkpoint not found. Please set SAM_CHECKPOINT_PATH in the sidebar to compute masks.")
+    
+    # Save button (only works if mask exists)
+    if save_btn:
+        if cell_id in st.session_state.masks:
+            mask = st.session_state.masks[cell_id]
             # Save mask
             mask_path = output_root / f"{cell_id}_cell_mask_manual.npy"
             np.save(mask_path, mask)
@@ -284,8 +387,8 @@ with tab1:
             
             st.success(f"✅ Mask and parameters saved!")
             st.info(f"Mask: `{mask_path}`\nParameters: `{params_path}`")
-    else:
-        st.info("👈 Click 'Recompute Mask' to generate a mask for this cell")
+        else:
+            st.warning("No mask to save. Please compute a mask first.")
 
 
 # ========================================================================
