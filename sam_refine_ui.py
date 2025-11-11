@@ -143,13 +143,24 @@ else:
 
 # Display data status in sidebar
 st.sidebar.markdown("---")
+st.sidebar.subheader("Dataset Status")
 if data_status == "exists":
     st.sidebar.success(f"✅ Image dataset found in {data_root_str}/")
+    # Add manual download button
+    if st.sidebar.button("⬇️ Re-download from Dropbox", help="Force re-download of dataset"):
+        import shutil
+        if Path(data_root_str).exists():
+            shutil.rmtree(data_root_str)
+        st.sidebar.info("Re-downloading...")
+        st.rerun()  # This will trigger ensure_data_available again
 elif data_status == "downloaded":
     st.sidebar.success(f"⬇️ Downloaded dataset from Dropbox into {data_root_str}/")
 elif data_status.startswith("error:"):
     st.sidebar.error(f"❌ {data_status}")
     st.sidebar.info("Please ensure you have internet connection and try again.")
+    # Add retry button on error
+    if st.sidebar.button("🔄 Retry Download"):
+        st.rerun()
 
 # Create tabs
 tab1, tab2 = st.tabs(["Mask Refinement", "Analysis Summary"])
