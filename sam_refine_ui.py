@@ -21,6 +21,9 @@ from image_analysis.metrics import (
     compute_cell_area, compute_circularity, compute_aspect_ratio
 )
 from image_analysis.data_setup import ensure_data_available
+from image_analysis.gemini_qc import evaluate_segmentation_with_gemini, GEMINI_AVAILABLE
+from image_analysis.plotting import overlay_mask_on_image
+from image_analysis.segmentation import segment_nuclei_robust
 
 
 # Page config
@@ -175,6 +178,20 @@ with tab1:
             recompute_btn = st.button("🔄 Recompute Mask", type="primary")
         with col2:
             save_btn = st.button("💾 Accept & Save")
+        
+        # Gemini QC section (optional)
+        st.sidebar.markdown("---")
+        st.sidebar.subheader("Gemini QC (Optional)")
+        gemini_api_key = os.getenv('GEMINI_API_KEY')
+        if gemini_api_key and GEMINI_AVAILABLE:
+            st.sidebar.success("✅ Gemini QC available")
+            run_gemini_qc_btn = st.sidebar.button("🔍 Run Gemini QC", type="secondary")
+        else:
+            if not gemini_api_key:
+                st.sidebar.info("💡 Set GEMINI_API_KEY to enable QC")
+            elif not GEMINI_AVAILABLE:
+                st.sidebar.info("💡 Install google-generativeai for QC")
+            run_gemini_qc_btn = False
     
     # Data root (use the same one from data_setup)
     data_root = Path(data_root_str)
@@ -389,6 +406,169 @@ with tab1:
             st.info(f"Mask: `{mask_path}`\nParameters: `{params_path}`")
         else:
             st.warning("No mask to save. Please compute a mask first.")
+    
+    # Gemini QC evaluation
+    if run_gemini_qc_btn and cell_id in st.session_state.masks:
+        if not gemini_api_key:
+            st.error("❌ GEMINI_API_KEY not set. Please set it as an environment variable.")
+        elif not GEMINI_AVAILABLE:
+            st.error("❌ google-generativeai package not installed.")
+        else:
+            with st.spinner(f"Running Gemini QC evaluation for {cell_id}..."):
+                try:
+                    # Get current mask and images
+                    cell_mask = st.session_state.masks[cell_id]
+                    actin_img = st.session_state.images[cell_id]
+                    
+                    # Load nuclei image if available
+                    nuclei_img = None
+                    if paths['nuclei']:
+                        from skimage import io, color
+                        nuclei_img_raw = io.imread(paths['nuclei'])
+                        if len(nuclei_img_raw.shape) == 3:
+                            nuclei_img = color.rgb2gray(nuclei_img_raw)
+                        else:
+                            nuclei_img = nuclei_img_raw.copy()
+                        if nuclei_img.max() > 1.0:
+                            nuclei_img = nuclei_img.astype(np.float32) / 255.0
+                        else:
+                            nuclei_img = nuclei_img.astype(np.float32)
+                        
+                        # Resize nuclei image to match actin if needed
+                        if nuclei_img.shape != actin_img.shape:
+                            from skimage.transform import resize
+                            nuclei_img = resize(nuclei_img, actin_img.shape, order=1, preserve_range=True)
+                    
+                    # Segment nuclei inside cell mask (for overlay)
+                    nucleus_mask = None
+                    if nuclei_img is not None:
+                        cell_area_px = np.sum(cell_mask)
+                        try:
+                            nucleus_mask, _ = segment_nuclei_robust(
+                                nuclei_img, cell_mask, cell_area_px
+                            )
+                        except Exception as e:
+                            st.warning(f"Could not segment nuclei for QC: {e}")
+                            nucleus_mask = np.zeros_like(cell_mask, dtype=bool)
+                    
+                    # Create overlay image (nuclei channel with both masks)
+                    # Use nuclei image if available, otherwise use actin
+                    base_image = nuclei_img if nuclei_img is not None else actin_img
+                    
+                    # Create overlay: green for cell, magenta for nuclei
+                    overlay = base_image.copy()
+                    if len(overlay.shape) == 2:
+                        overlay = np.stack([overlay, overlay, overlay], axis=-1)
+                    
+                    # Overlay cell mask in green
+                    overlay = overlay_mask_on_image(
+                        overlay, cell_mask, 
+                        color=(0.0, 1.0, 0.0),  # Green
+                        alpha=0.3,
+                        contour_color=(0.0, 1.0, 0.0),
+                        contour_width=2.0
+                    )
+                    
+                    # Overlay nuclear mask in magenta if available
+                    if nucleus_mask is not None and np.any(nucleus_mask):
+                        overlay = overlay_mask_on_image(
+                            overlay, nucleus_mask,
+                            color=(1.0, 0.0, 1.0),  # Magenta
+                            alpha=0.3,
+                            contour_color=(1.0, 0.0, 1.0),
+                            contour_width=2.0
+                        )
+                    
+                    # Save overlay to temp file for Gemini
+                    import tempfile
+                    with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_overlay:
+                        overlay_fig, overlay_ax = plt.subplots(figsize=(10, 10))
+                        overlay_ax.imshow(overlay)
+                        overlay_ax.axis('off')
+                        overlay_ax.set_title(f'{cell_id} - Cell (green) and Nuclear (magenta) masks')
+                        plt.tight_layout()
+                        plt.savefig(tmp_overlay.name, dpi=150, bbox_inches='tight')
+                        plt.close(overlay_fig)
+                        overlay_path = tmp_overlay.name
+                    
+                    # Save raw image to temp file
+                    with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_raw:
+                        raw_fig, raw_ax = plt.subplots(figsize=(10, 10))
+                        raw_ax.imshow(base_image, cmap='gray')
+                        raw_ax.axis('off')
+                        raw_ax.set_title(f'{cell_id} - Raw {("Nuclei" if nuclei_img is not None else "Actin")} channel')
+                        plt.tight_layout()
+                        plt.savefig(tmp_raw.name, dpi=150, bbox_inches='tight')
+                        plt.close(raw_fig)
+                        raw_path = tmp_raw.name
+                    
+                    # Run Gemini QC
+                    qc_result = evaluate_segmentation_with_gemini(
+                        cell_id=cell_id,
+                        raw_image_path=raw_path,
+                        overlay_image_path=overlay_path,
+                        channel="nuclei" if nuclei_img is not None else "actin",
+                        model_name="gemini-2.5-flash"
+                    )
+                    
+                    # Store result in session state
+                    if 'gemini_qc' not in st.session_state:
+                        st.session_state.gemini_qc = {}
+                    st.session_state.gemini_qc[cell_id] = qc_result
+                    
+                    # Clean up temp files
+                    import os
+                    try:
+                        os.unlink(overlay_path)
+                        os.unlink(raw_path)
+                    except:
+                        pass
+                    
+                    st.success("✅ Gemini QC evaluation complete!")
+                    
+                except Exception as e:
+                    st.error(f"❌ Gemini QC failed: {e}")
+                    import traceback
+                    st.code(traceback.format_exc())
+    
+    # Display Gemini QC results if available
+    if 'gemini_qc' in st.session_state and cell_id in st.session_state.gemini_qc:
+        qc_result = st.session_state.gemini_qc[cell_id]
+        
+        st.markdown("---")
+        st.subheader("🔍 Gemini QC Results")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            cell_score = qc_result.get('cell_mask_score')
+            if cell_score is not None:
+                st.metric("Cell Mask Score", f"{cell_score:.2f}", 
+                         help="Score from 0.0 (poor) to 1.0 (excellent)")
+            else:
+                st.metric("Cell Mask Score", "N/A")
+        
+        with col2:
+            nucleus_score = qc_result.get('nucleus_mask_score')
+            if nucleus_score is not None:
+                st.metric("Nuclear Mask Score", f"{nucleus_score:.2f}",
+                         help="Score from 0.0 (poor) to 1.0 (excellent)")
+            else:
+                st.metric("Nuclear Mask Score", "N/A")
+        
+        # Issues
+        issues = qc_result.get('issues', [])
+        if issues:
+            st.markdown("**⚠️ Issues Identified:**")
+            for issue in issues:
+                st.markdown(f"- {issue}")
+        
+        # Suggested operations
+        suggested_ops = qc_result.get('suggested_ops', [])
+        if suggested_ops:
+            st.markdown("**💡 Suggested Improvements:**")
+            for op in suggested_ops:
+                st.markdown(f"- {op}")
 
 
 # ========================================================================
