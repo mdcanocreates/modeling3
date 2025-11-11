@@ -10,6 +10,9 @@ This Streamlit app provides an interactive interface for:
 # Activate the virtual environment
 source venv_sam/bin/activate
 
+# (Optional) Set Gemini API key for QC feature
+export GEMINI_API_KEY="your-api-key-here"
+
 # Run the Streamlit app
 streamlit run sam_refine_ui.py
 ```
@@ -19,6 +22,10 @@ The app will:
 - Open in your browser at `http://localhost:8501`
 
 No manual download needed! The dataset will be fetched automatically on first run.
+
+### Setting API Keys
+
+See `SETUP_API_KEYS.md` for detailed instructions on setting the `GEMINI_API_KEY` environment variable.
 
 ## Features
 
