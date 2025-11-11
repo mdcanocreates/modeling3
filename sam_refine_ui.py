@@ -84,6 +84,55 @@ def overlay_mask_on_image(image: np.ndarray, mask: np.ndarray, alpha: float = 0.
 # Main app
 st.title("🔬 Cell SAM Refinement & Analysis")
 
+# Check SAM checkpoint path
+import os
+sam_checkpoint_path = os.getenv('SAM_CHECKPOINT_PATH')
+
+# Try common locations if not set or doesn't exist
+if not sam_checkpoint_path or not Path(sam_checkpoint_path).exists():
+    # Try common locations (check current directory first)
+    repo_root = Path(__file__).parent if '__file__' in globals() else Path.cwd()
+    common_paths = [
+        repo_root / "sam_vit_b_01ec64.pth",  # Current directory
+        Path("sam_vit_b_01ec64.pth"),  # Relative to working directory
+        Path.home() / "Downloads" / "sam_vit_b_01ec64.pth",
+        repo_root / "segment-anything-main" / "sam_vit_b_01ec64.pth",
+    ]
+    
+    found_path = None
+    for path in common_paths:
+        abs_path = path.resolve() if path.is_absolute() or str(path).startswith('~') else (Path.cwd() / path).resolve()
+        if abs_path.exists():
+            found_path = str(abs_path)
+            break
+    
+    if found_path:
+        st.sidebar.success(f"✅ Found SAM checkpoint: {Path(found_path).name}")
+        os.environ['SAM_CHECKPOINT_PATH'] = found_path
+        sam_checkpoint_path = found_path
+    else:
+        st.sidebar.error("⚠️ SAM_CHECKPOINT_PATH not set")
+        st.sidebar.info("Please set the environment variable:\n```bash\nexport SAM_CHECKPOINT_PATH=\"/path/to/sam_vit_b_01ec64.pth\"\n```")
+        st.sidebar.info("Or provide the path in the sidebar below.")
+        
+        # Allow manual input
+        manual_path = st.sidebar.text_input(
+            "SAM Checkpoint Path (optional)",
+            value="",
+            help="Enter the full path to sam_vit_b_01ec64.pth"
+        )
+        if manual_path and Path(manual_path).exists():
+            os.environ['SAM_CHECKPOINT_PATH'] = manual_path
+            sam_checkpoint_path = manual_path
+            st.sidebar.success(f"✅ Using: {Path(manual_path).name}")
+        elif manual_path:
+            st.sidebar.warning(f"⚠️ Path not found: {manual_path}")
+else:
+    if Path(sam_checkpoint_path).exists():
+        st.sidebar.success(f"✅ SAM checkpoint: {Path(sam_checkpoint_path).name}")
+    else:
+        st.sidebar.error(f"⚠️ SAM checkpoint not found: {sam_checkpoint_path}")
+
 # Create tabs
 tab1, tab2 = st.tabs(["Mask Refinement", "Analysis Summary"])
 
@@ -126,6 +175,11 @@ with tab1:
     
     # Recompute mask button
     if recompute_btn:
+        # Check if SAM checkpoint is available
+        if not sam_checkpoint_path or not Path(sam_checkpoint_path).exists():
+            st.error("❌ SAM checkpoint not found. Please set SAM_CHECKPOINT_PATH in the sidebar.")
+            st.stop()
+        
         with st.spinner(f"Computing mask for {cell_id}..."):
             try:
                 result = segment_cell_with_sam(
@@ -137,7 +191,8 @@ with tab1:
                     close_radius=close_radius,
                     actin_percentile=actin_percentile,
                     band_frac=band_frac,
-                    band_coverage=band_coverage
+                    band_coverage=band_coverage,
+                    checkpoint_path=sam_checkpoint_path
                 )
                 
                 # Store in session state
