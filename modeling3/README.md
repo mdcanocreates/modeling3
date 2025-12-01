@@ -212,6 +212,17 @@ If you use this code, please cite:
 - Modeling 2 pipeline (base metrics and segmentation)
 - This Modeling 3 extension
 
+## Output Data
+
+Complete pipeline outputs are available for reference:
+
+- **Initial Run (with errors)**: [Dropbox Link](https://www.dropbox.com/scl/fo/lvgtyfkcfgrc9wf34m7ms/AMdciLmxyg4zuwr9iE5Ywjc?rlkey=hlk3cfv17zj8hpc9uvl0so5le&st=0dcxf3lf&dl=0)
+  - Contains 45 samples (18 Algorithm 1 images failed metrics computation due to tuple subtraction bug)
+  
+- **Fixed Run (all 63 samples)**: [Dropbox Link](https://www.dropbox.com/scl/fo/yjvh3uhvhrvdde5fkjjun/AMSR_WosgK90y-QzfTGTKgg?rlkey=w13ojd3e6ke3lf0k6z3v1wx8f&st=s95euqqt&dl=0)
+  - Contains all 63 samples (3 originals + 30 alg1 + 30 alg2) with complete metrics
+  - All figures, CSVs, and summaries included
+
 ## License
 
 Same as parent project.
