@@ -18,6 +18,7 @@ This report documents the development of **Modeling 3**, an extension of the Mod
 - Zero NaNs in final feature matrix
 - All outputs validated and publication-ready
 - Export utility for assignment deliverables (≥9 grayscale + ≥21 RGB composites)
+- Export utility for assignment deliverables (≥9 grayscale + ≥21 RGB composites)
 
 ---
 
@@ -54,6 +55,7 @@ modeling3/
 ├── clustering.py       # K-Means, Hierarchical clustering
 ├── evaluation.py       # Parent-match rates, intra-cluster distances
 ├── viz.py              # Publication-ready figures
+├── export_images.py    # Assignment deliverables (grayscale + RGB exports)
 └── main_mc3.py         # CLI orchestration
 ```
 
@@ -527,6 +529,7 @@ modeling3/
 ├── clustering.py       # K-Means, Hierarchical, Silhouette
 ├── evaluation.py       # Parent-match rate, intra-cluster distances
 ├── viz.py              # Publication-ready figures
+├── export_images.py    # Assignment deliverables export utility
 ├── main_mc3.py         # Main CLI entry point
 └── README.md           # Documentation
 ```
@@ -547,6 +550,8 @@ modeling3/
 - `summary_mc3.txt/.json`: Clustering results summary
 - `errors_mc3.log`: Error log (for debugging)
 - `figures/*.png`: 6 publication-ready figures (300 DPI)
+- `exported_images/grayscale/*.png`: ≥9 grayscale images (assignment deliverables)
+- `exported_images/color/*.png`: ≥21 RGB composite images (assignment deliverables)
 
 ---
 
