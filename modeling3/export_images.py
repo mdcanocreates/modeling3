@@ -19,29 +19,54 @@ import random
 import modeling3.config as config
 
 
-def normalize_channel(image: np.ndarray) -> np.ndarray:
+def normalize_channel(image: np.ndarray, use_percentile: bool = True) -> np.ndarray:
     """
     Normalize a grayscale image to float32 [0, 1] range.
+    
+    Uses percentile-based normalization (2nd-98th percentile) for better contrast
+    and more vibrant colors, which is standard in microscopy image processing.
     
     Parameters
     ----------
     image : np.ndarray
         Input image (any dtype)
+    use_percentile : bool
+        If True, use percentile-based normalization (default: True)
     
     Returns
     -------
     np.ndarray
         Normalized float32 image [0, 1]
     """
-    if image.dtype == np.uint8:
-        # 8-bit image: normalize to [0, 1]
-        normalized = image.astype(np.float32) / 255.0
-    elif image.max() > 1.0:
-        # Likely 16-bit or other: normalize by max
-        normalized = (image.astype(np.float32) / image.max()).clip(0, 1)
+    img_float = image.astype(np.float32)
+    
+    if use_percentile:
+        # Use percentile-based normalization for better contrast
+        # This avoids issues with outliers and provides more vibrant colors
+        p2 = np.percentile(img_float, 2)
+        p98 = np.percentile(img_float, 98)
+        
+        if p98 > p2:
+            # Normalize using percentile range
+            normalized = (img_float - p2) / (p98 - p2)
+            normalized = normalized.clip(0, 1)
+        else:
+            # Fallback to min-max if percentiles are too close
+            img_min = img_float.min()
+            img_max = img_float.max()
+            if img_max > img_min:
+                normalized = (img_float - img_min) / (img_max - img_min)
+            else:
+                normalized = np.zeros_like(img_float)
     else:
-        # Already normalized
-        normalized = image.astype(np.float32)
+        # Standard min-max normalization
+        if image.dtype == np.uint8:
+            normalized = img_float / 255.0
+        elif image.max() > 1.0:
+            img_max = image.max()
+            normalized = (img_float / img_max).clip(0, 1)
+        else:
+            normalized = img_float
     
     return normalized
 
@@ -52,12 +77,15 @@ def make_color_composite(
     nuclei: np.ndarray
 ) -> np.ndarray:
     """
-    Create RGB composite image.
+    Create RGB composite image with enhanced contrast.
     
     RGB mapping:
     - R channel = microtubules (mt)
     - G channel = actin
     - B channel = nuclei (nuc)
+    
+    Uses percentile-based normalization for each channel independently
+    to ensure vibrant, visible colors.
     
     Parameters
     ----------
@@ -73,10 +101,11 @@ def make_color_composite(
     np.ndarray
         RGB composite image (H, W, 3) as uint8 [0, 255]
     """
-    # Normalize all channels to [0, 1]
-    actin_norm = normalize_channel(actin)
-    mt_norm = normalize_channel(mt)
-    nuclei_norm = normalize_channel(nuclei)
+    # Normalize each channel independently using percentile-based normalization
+    # This ensures each channel has good contrast and colors are vibrant
+    actin_norm = normalize_channel(actin, use_percentile=True)
+    mt_norm = normalize_channel(mt, use_percentile=True)
+    nuclei_norm = normalize_channel(nuclei, use_percentile=True)
     
     # Stack into RGB: R=mt, G=actin, B=nuc
     rgb = np.stack([mt_norm, actin_norm, nuclei_norm], axis=-1)
