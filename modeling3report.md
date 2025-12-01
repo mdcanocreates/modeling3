@@ -17,6 +17,7 @@ This report documents the development of **Modeling 3**, an extension of the Mod
 - Achieved 75% parent-match rate in clustering
 - Zero NaNs in final feature matrix
 - All outputs validated and publication-ready
+- Export utility for assignment deliverables (≥9 grayscale + ≥21 RGB composites)
 
 ---
 
@@ -157,6 +158,30 @@ modeling3/
 **Color Palette:** ColorBrewer Set2 (colorblind-safe)
 
 **Code Location:** `modeling3/viz.py`
+
+### 2.5 Image Export Utility
+
+**Purpose:** Export assignment deliverables (grayscale and RGB composite images) independently of the main pipeline.
+
+**Implementation:**
+- **Grayscale Export:** Randomly selects channels from manifest and exports ≥9 grayscale images
+- **RGB Composite Export:** Creates ≥21 RGB composites using:
+  - R channel = microtubules (mt)
+  - G channel = actin
+  - B channel = nuclei (nuc)
+- **Features:**
+  - Auto-detects latest manifest from output directories
+  - Avoids duplicate exports
+  - PNG format, 300 DPI
+  - Colorblind-safe RGB arrangement
+  - Naming: `gray_<sample_id>_<channel>.png`, `color_<sample_id>.png`
+
+**Usage:**
+```bash
+python -m modeling3.export_images
+```
+
+**Code Location:** `modeling3/export_images.py`
 
 ---
 
