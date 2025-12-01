@@ -1,0 +1,14 @@
+MODELING 3 PIPELINE SUMMARY
+============================================================
+
+Total images: 63
+  - Originals: 3
+  - Algorithm 1: 30
+  - Algorithm 2: 30
+
+CLUSTERING RESULTS
+------------------------------------------------------------
+K-Means silhouette: 0.388
+K-Means parent-match: 73.8%
+Hierarchical silhouette: 0.425
+Hierarchical parent-match: 90.5%
