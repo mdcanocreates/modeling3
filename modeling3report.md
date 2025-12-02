@@ -20,6 +20,11 @@ This report documents the development of **Modeling 3**, an extension of the Mod
 - Export utility for assignment deliverables (≥9 grayscale + ≥21 RGB composites)
 - Export utility for assignment deliverables (≥9 grayscale + ≥21 RGB composites)
 
+**Link to Image Outputs**
+- original output:https://www.dropbox.com/scl/fo/lvgtyfkcfgrc9wf34m7ms/AMdciLmxyg4zuwr9iE5Ywjc?rlkey=hlk3cfv17zj8hpc9uvl0so5le&st=122ejg99&dl=0
+- fixed output:https://www.dropbox.com/scl/fo/yjvh3uhvhrvdde5fkjjun/AMSR_WosgK90y-QzfTGTKgg?rlkey=w13ojd3e6ke3lf0k6z3v1wx8f&st=rl0zeqet&dl=0
+- latest output:https://www.dropbox.com/scl/fo/fbj7mv7bo4qh3o7pnwhn1/AMEg37NfLc0Ei89tgbW-548?rlkey=o8bsjtyqpzvhv1b7qsk2wnhlb&st=g9b5d830&dl=0
+
 ---
 
 ## 1. Problem Statement and Approach
