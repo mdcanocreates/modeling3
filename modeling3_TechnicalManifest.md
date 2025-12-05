@@ -95,6 +95,51 @@ Generates structural variants using Thin-Plate Spline (TPS) warping, which creat
 
 Same TPS control points are applied to all channels synchronously. Generated images saved in `output_dir/alg2/` with naming: `{parent_id}_alg2_{001-010}_{channel}.png`
 
+#### 2.3.3 Algorithm Prime: Variational Autoencoder (VAE)
+
+**Module**: `modeling3/gen_alg_prime.py`
+
+Generates novel endothelial cell phenotypes using a deep learning-based Variational Autoencoder. Extends 2D generations to 3D volumes using biological priors.
+
+**VAE Architecture:**
+- **Encoder**: Convolutional layers (Conv2d → BatchNorm → ReLU → MaxPool) reducing 4×256×256 input to 128-dimensional latent space
+- **Decoder**: Transposed convolutions (ConvTranspose2d → BatchNorm → ReLU) reconstructing 4×256×256 output from latent space
+- **Loss Function**: `L = MSE(reconstruction) + β × KL(prior || posterior)` where β=0.0001 (KL weight)
+
+**Training:**
+- **Dataset**: `CellImageDataset` loads 4-channel images from manifest (defaults to `manifest_qc_mc3.csv` if available)
+- **Weighted Sampling**: Uses `WeightedRandomSampler` to up-weight original cells (default: 5.0x)
+- **Split**: 80% train / 20% validation
+- **Epochs**: 80 with early stopping (saves best model based on validation loss)
+- **Optimizer**: Adam (lr=0.001)
+- **Batch Size**: 8
+
+**Sampling:**
+- `generate_samples()`: Samples random vectors from latent space (N(0,1)) and decodes to 4-channel images
+- Applies percentile-based contrast stretching (2nd-98th percentile) for visual quality
+- Saves as PNG files in `output_dir/algorithm_prime/generated/` with naming: `{parent_id}_algprime_{001-030}_{channel}.png`
+
+**3D Reconstruction:**
+- `infer_3d_volume()`: Reconstructs 3D volume from 2D 4-channel image using AllenCell priors
+  - Loads depth profiles from AllenCell OME-TIFFs (`data/allen_subset/raw/`)
+  - Extracts nucleus thickness, actin/membrane depth intensity, cytoskeletal depth decay
+  - Applies priors to 2D image to generate plausible 3D volume (4×Z×H×W)
+- `compute_3d_metrics()`: Computes 3D morphometry (cell/nucleus height/volume, depth-weighted actin polarity, 3D anisotropy)
+- Saves volumes as `.npy` files and exports orthogonal slices (XY, XZ, YZ) as PNG
+- Optional Napari 3D rendering for visualization
+
+**CLI Commands:**
+```bash
+# Train VAE
+python -m modeling3.gen_alg_prime train --original-weight 5.0
+
+# Generate samples
+python -m modeling3.gen_alg_prime sample --checkpoint ... -n 30 --stretch
+
+# 3D inference
+python -m modeling3.gen_alg_prime infer3d --sample-id CellA_algprime_001 --export-slices --render-3d
+```
+
 ### 2.4 Metric computation
 
 **Module**: `modeling3/metrics.py`
@@ -176,6 +221,39 @@ Self-contained utility for exporting assignment deliverables:
 - `export_sample_images()`: Exports ≥9 grayscale images (random channel selection) and ≥21 RGB composite images
 - `make_color_composite()`: Creates RGB composite with R=MT, G=Actin, B=Nuclei using percentile-based normalization (2nd-98th percentile) for enhanced contrast
 - `normalize_channel()`: Normalizes grayscale images using percentile-based scaling for better visual quality
+
+### 2.9 Quality Control Pipeline
+
+**Module**: `modeling3/qc_pipeline.py`
+
+Orchestrates the full QC pipeline for cleaning up outputs and preparing training data for Algorithm Prime.
+
+**Functions:**
+
+- `reset_outputs(force: bool = False)`: Safely deletes old alg1/alg2/algorithm_prime outputs and manifests. Requires `--force` flag to actually delete. Never touches original cells or Allen data.
+
+- `build_qc_manifest(...)`: 
+  - Loads `manifest_mc3.csv` and `filtering_results.csv`
+  - Joins on sample_id (extracted from `color_{sample_id}.png` filename)
+  - Filters to keep only rows where `passes=True`
+  - Moves rejected samples (all 4 channels) to `noise/{algorithm}/` directory
+  - Moves approved samples (all 4 channels) to `training/{algorithm}/` directory
+  - Updates manifest paths to reflect new locations
+  - Saves `manifest_qc_mc3.csv` with only accepted samples
+
+- `run_full_qc_pipeline(force: bool = False)`: Orchestrates reset → regenerate → filter → build QC manifest (regeneration step requires manual run of main pipeline)
+
+**CLI Interface:**
+```bash
+python -m modeling3.qc_pipeline reset-outputs [--force]
+python -m modeling3.qc_pipeline build-qc-manifest
+python -m modeling3.qc_pipeline run-full-qc [--force]
+```
+
+**Integration with Algorithm Prime:**
+- Algorithm Prime training automatically uses `manifest_qc_mc3.csv` if it exists
+- Supports `--original-weight` parameter to up-weight original cells during training
+- Ensures only QC-approved, biologically plausible images are used for training
 
 ## 3. CSV file reference
 

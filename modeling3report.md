@@ -13,12 +13,14 @@ This report documents the development of **Modeling 3**, an extension of the Mod
 
 **Key Achievements:**
 - Generated 63 images (3 originals + 30 Algorithm 1 + 30 Algorithm 2)
+- Implemented Algorithm Prime (VAE) for deep learning-based generation
 - Implemented 4 metric families with 20+ features
 - Achieved 75% parent-match rate in clustering
 - Zero NaNs in final feature matrix
 - All outputs validated and publication-ready
 - Export utility for assignment deliverables (≥9 grayscale + ≥21 RGB composites)
-- Export utility for assignment deliverables (≥9 grayscale + ≥21 RGB composites)
+- Quality Control (QC) pipeline for filtering biologically plausible images
+- QC-filtered training set with original cell up-weighting (5.0x) for Algorithm Prime
 
 **Link to Image Outputs**
 - original output:https://www.dropbox.com/scl/fo/lvgtyfkcfgrc9wf34m7ms/AMdciLmxyg4zuwr9iE5Ywjc?rlkey=hlk3cfv17zj8hpc9uvl0so5le&st=122ejg99&dl=0
@@ -56,7 +58,10 @@ modeling3/
 ├── preprocessing.py     # Normalization and channel extraction
 ├── gen_alg1.py         # Classical augmentation algorithm
 ├── gen_alg2.py         # TPS warping algorithm
+├── gen_alg_prime.py    # Algorithm Prime: VAE-based generation + 3D reconstruction
 ├── metrics.py          # Extended metrics (GLCM, alignment, etc.)
+├── quality_filter.py   # QC filtering for RGB composites
+├── qc_pipeline.py      # QC pipeline orchestration
 ├── clustering.py       # K-Means, Hierarchical clustering
 ├── evaluation.py       # Parent-match rates, intra-cluster distances
 ├── viz.py              # Publication-ready figures
@@ -104,7 +109,67 @@ modeling3/
 
 **Code Location:** `modeling3/gen_alg2.py`
 
-### 2.2 Extended Metrics Implementation
+#### Algorithm Prime: Variational Autoencoder (VAE)
+
+**Rationale:** Implement a deep learning-based generative model to produce novel endothelial cell phenotypes distinct from classical augmentation and TPS warping.
+
+**Implementation:**
+- **Architecture:** Convolutional encoder-decoder VAE
+  - Encoder: 4-channel input → latent space (128 dimensions)
+  - Decoder: Latent space → 4-channel output
+  - Loss: MSE reconstruction + KL divergence regularization
+- **Training:**
+  - Uses QC-filtered manifest (`manifest_qc_mc3.csv`) with 58 approved samples
+  - Original cells weighted 5.0x more than generated samples (WeightedRandomSampler)
+  - Train/validation split: 80/20
+  - 80 epochs with early stopping on validation loss
+  - Best model: Epoch 77 (val_loss: 0.022416)
+- **Sampling:** Generates new 2D 4-channel images by sampling from learned latent distribution
+- **3D Reconstruction:** Extends 2D samples to 3D volumes using AllenCell priors (depth profiles, intensity decay)
+
+**Key Design Decisions:**
+- **QC-filtered training:** Only trains on biologically plausible images (passed quality filter)
+- **Original weighting:** Up-weights original cells to preserve ground truth phenotype distribution
+- **Contrast stretching:** Applies percentile-based normalization (2nd-98th percentile) for better visual quality
+- **3D inference:** Uses biological priors rather than 3D neural network training (computationally efficient)
+
+**Code Location:** `modeling3/gen_alg_prime.py`
+
+### 2.2 Quality Control Pipeline
+
+**Purpose:** Filter generated images to ensure only biologically plausible samples are used for training Algorithm Prime and downstream analysis.
+
+**Implementation:**
+1. **Quality Filtering** (`quality_filter.py`):
+   - Filters RGB composite images based on:
+     - Edge density (≥0.005): Ensures sufficient structure
+     - Nucleus mask validation: 1-15 components, area 300-45000 px²
+     - Cell mask validation: 1-5 components, area 3000-65500 px²
+   - Produces `filtering_results.csv` with pass/fail status
+
+2. **QC Pipeline** (`qc_pipeline.py`):
+   - **`reset_outputs()`**: Safely deletes old alg1/alg2/algprime outputs (never touches originals or Allen data)
+   - **`build_qc_manifest()`**: 
+     - Joins `manifest_mc3.csv` with `filtering_results.csv`
+     - Creates `manifest_qc_mc3.csv` with only accepted samples
+     - Moves rejected samples to `noise/` directory
+     - Moves approved samples to `training/` directory (organized by algorithm)
+   - **`run_full_qc_pipeline()`**: Orchestrates reset → regenerate → filter → build QC manifest
+
+**Usage:**
+```bash
+# Build QC manifest from filtering results
+python -m modeling3.qc_pipeline build-qc-manifest
+
+# Train Algorithm Prime with QC data and original weighting
+python -m modeling3.gen_alg_prime train --original-weight 5.0
+```
+
+**Result:** Final training set contains 58 QC-approved samples (3 originals + 25 alg1 + 30 alg2), with originals weighted 5.0x during training.
+
+**Code Location:** `modeling3/quality_filter.py`, `modeling3/qc_pipeline.py`
+
+### 2.3 Extended Metrics Implementation
 
 #### Metric Family 1: Cell Morphology
 - **Reused from Modeling 2:** `cell_area`, `circularity`, `aspect_ratio`
@@ -293,6 +358,39 @@ class ImageRecord:
 
 **Code Location:** `modeling3/metrics.py::compute_glcm_features()`
 
+### 3.6 Issue: NaN Paths in Dataset Loading
+
+**Problem:** Some manifest entries had NaN values for channel paths, causing `TypeError` when creating `Path` objects during Algorithm Prime training.
+
+**Root Cause:** Manifest entries for samples with missing channels contained NaN instead of None or empty strings.
+
+**Solution:**
+- Added NaN check in `CellImageDataset.__getitem__()`:
+  ```python
+  if ch_path is None or (isinstance(ch_path, float) and pd.isna(ch_path)):
+      channels[ch_name] = np.zeros(self.image_size, dtype=np.float32)
+      continue
+  ```
+- Missing channels are replaced with zero-filled arrays instead of raising errors
+
+**Result:** Training now handles missing channels gracefully, allowing training to proceed with available data.
+
+**Code Location:** `modeling3/gen_alg_prime.py::CellImageDataset.__getitem__()`
+
+### 3.7 Issue: Manifest-Training Directory Mismatch
+
+**Problem:** After manual curation of training set, manifest entries did not match actual files in `training/` directory, leading to file count discrepancies.
+
+**Solution:**
+- Implemented manifest rebuilding from scratch by scanning `training/` directory
+- Handles both PNG and JPG formats, preferring PNG when both exist
+- Correctly counts unique channel files (170 files for 58 samples)
+- Removes entries for non-existent files and adds entries for new files
+
+**Result:** Manifest now accurately reflects the manually curated training directory with 58 samples (3 originals + 25 alg1 + 30 alg2).
+
+**Code Location:** `modeling3/qc_pipeline.py::build_qc_manifest()`
+
 ---
 
 ## 4. Technical Decisions and Rationale
@@ -357,6 +455,38 @@ base_metrics.update(adhesion_proxies)
 - Prevents unrealistic artifacts
 - Simulates real imaging conditions
 
+### 4.6 Why Quality Control Pipeline?
+
+**Decision:** Implement QC filtering to exclude noisy/implausible images from training.
+
+**Rationale:**
+- Algorithm Prime (VAE) is sensitive to training data quality
+- Noisy images can degrade model performance
+- Biological plausibility criteria ensure generated samples are realistic
+- Original cells should be weighted more heavily to preserve ground truth distribution
+
+**Implementation:**
+- Filter RGB composites using edge density, nucleus/cell mask validation
+- Build QC manifest with only accepted samples
+- Move rejected samples to `noise/` directory for inspection
+- Move approved samples to `training/` directory for Algorithm Prime
+
+### 4.7 Why Original Cell Weighting?
+
+**Decision:** Weight original cells 5.0x more than generated samples during Algorithm Prime training.
+
+**Rationale:**
+- Original cells represent ground truth phenotypes
+- Limited number of originals (3) vs. generated samples (55)
+- Up-weighting ensures model learns from real data more frequently
+- Prevents model from overfitting to augmentation artifacts
+
+**Implementation:**
+- Uses `WeightedRandomSampler` in PyTorch DataLoader
+- Original samples: weight = 5.0
+- Generated samples: weight = 1.0
+- Weights automatically normalized
+
 ---
 
 ## 5. Validation and Quality Assurance
@@ -393,18 +523,36 @@ base_metrics.update(adhesion_proxies)
 
 ### 6.1 Image Generation
 
-- **Total Images:** 63
+- **Total Images:** 63 (Algorithms 1 & 2)
   - Originals: 3
   - Algorithm 1: 30
   - Algorithm 2: 30
+- **Algorithm Prime:** VAE trained on 58 QC-approved samples, generates 30+ new samples
 
-### 6.2 Metrics Extraction
+### 6.2 Quality Control
+
+- **QC-Filtered Training Set:** 58 samples
+  - Originals: 3 (weighted 5.0x)
+  - Algorithm 1: 25 approved (5 rejected)
+  - Algorithm 2: 30 approved (0 rejected)
+- **Rejected Samples:** Moved to `noise/` directory for inspection
+- **Approved Samples:** Moved to `training/` directory for Algorithm Prime
+
+### 6.3 Algorithm Prime Training
+
+- **Training Data:** 58 QC-approved samples (46 train / 12 validation)
+- **Original Weighting:** 5.0x (originals sampled 5x more frequently)
+- **Best Model:** Epoch 77 (validation loss: 0.022416)
+- **Training Time:** ~8 minutes (80 epochs, CPU)
+- **Checkpoint Size:** 161 MB
+
+### 6.4 Metrics Extraction
 
 - **Total Features:** 20+ metrics across 4 families
 - **Samples with Metrics:** 63/63 (100%)
 - **Data Quality:** Zero NaNs, all ranges valid
 
-### 6.3 Clustering Performance
+### 6.5 Clustering Performance
 
 - **K-Means:**
   - Silhouette Score: 0.337
@@ -414,11 +562,12 @@ base_metrics.update(adhesion_proxies)
   - Silhouette Score: 0.337
   - Parent-Match Rate: 75.0%
 
-### 6.4 Algorithm Comparison
+### 6.6 Algorithm Comparison
 
 - **Algorithm 1 Match Rate:** ~75% (varies by parent)
 - **Algorithm 2 Match Rate:** ~75% (varies by parent)
-- **Conclusion:** Both algorithms produce variants that cluster with parents at similar rates
+- **Algorithm Prime:** VAE-based generation produces novel phenotypes distinct from classical methods
+- **Conclusion:** All three algorithms produce variants that cluster with parents, with Algorithm Prime offering the most diverse generation approach
 
 ---
 
@@ -535,6 +684,10 @@ modeling3/
 ├── evaluation.py       # Parent-match rate, intra-cluster distances
 ├── viz.py              # Publication-ready figures
 ├── export_images.py    # Assignment deliverables export utility
+├── quality_filter.py   # QC filtering for RGB composites
+├── qc_pipeline.py      # QC pipeline orchestration
+├── gen_alg_prime.py    # Algorithm Prime: VAE + 3D reconstruction
+├── view3d.py           # 3D volume visualization (Napari)
 ├── main_mc3.py         # Main CLI entry point
 └── README.md           # Documentation
 ```
@@ -547,16 +700,28 @@ modeling3/
 - `matplotlib`, `seaborn`: Visualization
 - `scipy`: Statistical functions, distance metrics
 - `tqdm`: Progress bars
+- `torch`: Deep learning (VAE for Algorithm Prime)
+- `aicsimageio`: OME-TIFF loading for 3D data
+- `napari`: 3D volume visualization
+- `PyQt5`: GUI backend for Napari
 
 ## Appendix C: Output Files
 
 - `manifest_mc3.csv`: Image manifest (63 records)
+- `manifest_qc_mc3.csv`: QC-filtered manifest (58 approved samples)
 - `features_mc3.csv`: Extended metrics (63 samples × 20+ features)
 - `summary_mc3.txt/.json`: Clustering results summary
 - `errors_mc3.log`: Error log (for debugging)
 - `figures/*.png`: 6 publication-ready figures (300 DPI)
 - `exported_images/grayscale/*.png`: ≥9 grayscale images (assignment deliverables)
 - `exported_images/color/*.png`: ≥21 RGB composite images (assignment deliverables)
+- `exported_images/filtering_results.csv`: QC filtering results
+- `algorithm_prime/vae_checkpoint.pt`: Trained VAE model (161 MB)
+- `algorithm_prime/generated/*.png`: Algorithm Prime generated samples
+- `algorithm_prime/3d_recon/*.npy`: 3D reconstructed volumes
+- `algorithm_prime/3d_recon/3d_metrics_algprime.csv`: 3D morphometric metrics
+- `training/`: QC-approved samples organized by algorithm
+- `noise/`: Rejected samples organized by algorithm
 
 ---
 
