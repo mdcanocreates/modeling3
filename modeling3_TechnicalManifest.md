@@ -140,6 +140,64 @@ python -m modeling3.gen_alg_prime sample --checkpoint ... -n 30 --stretch
 python -m modeling3.gen_alg_prime infer3d --sample-id CellA_algprime_001 --export-slices --render-3d
 ```
 
+#### 2.3.4 Algorithm D: Diffusion Model Scaffold
+
+**Module**: `modeling3/gen_alg_diffusion.py`
+
+**IMPORTANT: This is a scaffold for future work only. Algorithm D is NOT used in any reported results and is DISABLED by default.**
+
+**Status:**
+- **DISABLED by default** via `DIFFUSION_ENABLED = False` in `config.py`
+- **Not trained** - skeleton implementation only
+- **Not integrated** - completely self-contained, does not connect to main pipeline, training, or metrics
+- **Scaffold only** - provided for architectural completeness
+
+**Architecture:**
+- **UNet Backbone**: 2D encoder-decoder UNet with timestep embedding
+  - Input: 4-channel images (batch, 4, 256, 256)
+  - Output: Predicted noise (batch, 4, 256, 256)
+  - Encoder: 4 conv blocks with downsampling (256×256 → 16×16)
+  - Decoder: 4 transposed conv blocks with upsampling and skip connections (16×16 → 256×256)
+  - Timestep embedding: Sinusoidal positional encoding injected at each level
+- **Beta Schedule**: Linear noise schedule
+  - Number of steps: 1000 (configurable via `DIFFUSION_NUM_STEPS`)
+  - Beta range: 0.0001 → 0.02 (configurable via `DIFFUSION_BETA_START`, `DIFFUSION_BETA_END`)
+  - Computes alpha and alpha_bar (cumulative) for forward/reverse diffusion
+- **Components:**
+  - `TimestepEmbedding`: Converts integer timesteps to dense vector embeddings
+  - `DiffusionUNet2D`: UNet model for noise prediction
+  - `BetaSchedule`: Linear noise schedule implementation
+  - `DiffusionModel`: Wrapper class with forward/reverse diffusion methods
+
+**Methods:**
+- `add_noise(x, t)`: Forward diffusion step - adds noise to clean images
+- `predict_noise(x_t, t)`: Predicts noise from noisy image and timestep
+- `sample(num_samples)`: Reverse diffusion sampling loop (skeleton implementation)
+
+**CLI Commands:**
+```bash
+# Print architecture summary and status
+python -m modeling3.gen_alg_diffusion info
+
+# Run skeleton sampling loop (disabled by default)
+python -m modeling3.gen_alg_diffusion sample -n 4
+```
+
+**Configuration:**
+- `DIFFUSION_ENABLED = False` (master disable flag - must be True to use)
+- `DIFFUSION_NUM_STEPS = 1000` (number of diffusion steps)
+- `DIFFUSION_BETA_START = 0.0001` (starting noise schedule value)
+- `DIFFUSION_BETA_END = 0.02` (ending noise schedule value)
+- Reuses `IMAGE_SIZE = (256, 256)` from main config
+
+**Safety Features:**
+- Hard disable at multiple checkpoints (module import, class initialization, CLI entry points)
+- Optional torch dependency (module imports even without torch, but raises error on use)
+- Clear documentation warnings throughout code
+- No integration with other algorithms or main pipeline
+
+**Note:** This module is provided for architectural completeness and future work only. It is explicitly disabled and not used in any reported results.
+
 ### 2.4 Metric computation
 
 **Module**: `modeling3/metrics.py`
@@ -683,6 +741,10 @@ python -m modeling3.main_mc3 --dry-run --verbose
 - `ALG1_NOISE_STD = 0.02`: Gaussian noise standard deviation
 - `ALG2_N_CONTROL_POINTS = 10`: Number of TPS control points
 - `ALG2_DISPLACEMENT_MAX = 20`: Maximum TPS displacement in pixels
+- `DIFFUSION_ENABLED = False`: Master flag for Algorithm D (disabled by default)
+- `DIFFUSION_NUM_STEPS = 1000`: Number of diffusion steps (Algorithm D)
+- `DIFFUSION_BETA_START = 0.0001`: Starting noise schedule value (Algorithm D)
+- `DIFFUSION_BETA_END = 0.02`: Ending noise schedule value (Algorithm D)
 
 **Figure settings**:
 - `FIGURE_DPI = 300`: Publication-ready resolution

@@ -59,6 +59,7 @@ modeling3/
 ├── gen_alg1.py         # Classical augmentation algorithm
 ├── gen_alg2.py         # TPS warping algorithm
 ├── gen_alg_prime.py    # Algorithm Prime: VAE-based generation + 3D reconstruction
+├── gen_alg_diffusion.py # Algorithm D: Diffusion model scaffold (disabled by default)
 ├── metrics.py          # Extended metrics (GLCM, alignment, etc.)
 ├── quality_filter.py   # QC filtering for RGB composites
 ├── qc_pipeline.py      # QC pipeline orchestration
@@ -134,6 +135,38 @@ modeling3/
 - **3D inference:** Uses biological priors rather than 3D neural network training (computationally efficient)
 
 **Code Location:** `modeling3/gen_alg_prime.py`
+
+#### Algorithm D: Diffusion Model Scaffold
+
+**Rationale:** Architectural scaffold for future diffusion-based generation. This is a placeholder for future work and is **NOT used in any reported results**.
+
+**Status:**
+- **DISABLED by default** via `DIFFUSION_ENABLED = False` in `config.py`
+- **Not trained** - skeleton implementation only
+- **Not integrated** - completely self-contained, does not connect to main pipeline
+- **Scaffold only** - provided for architectural completeness
+
+**Implementation:**
+- **Architecture:** 2D UNet-based diffusion model
+  - UNet backbone: Encoder-decoder with timestep embedding
+  - Input/Output: 4-channel images (256×256)
+  - Timestep embedding: Sinusoidal positional encoding
+  - Beta schedule: Linear noise schedule (1000 steps, beta: 0.0001 → 0.02)
+- **Components:**
+  - `DiffusionUNet2D`: 2D UNet with skip connections and time embedding injection
+  - `BetaSchedule`: Linear noise schedule for forward/reverse diffusion
+  - `DiffusionModel`: Wrapper class with forward diffusion (add noise) and reverse diffusion (sampling) methods
+- **CLI Interface:**
+  - `python -m modeling3.gen_alg_diffusion info` - Print architecture summary
+  - `python -m modeling3.gen_alg_diffusion sample -n 4` - Skeleton sampling loop (disabled by default)
+
+**Key Design Decisions:**
+- **Hard disable:** Multiple checkpoints prevent accidental use (`DIFFUSION_ENABLED` flag checked at module import, class initialization, and CLI entry points)
+- **Self-contained:** No integration with Algorithms 1, 2, Prime, or main pipeline
+- **Optional dependencies:** Module can be imported even without torch installed (graceful degradation)
+- **Clear documentation:** Extensive warnings that this is scaffold-only and not used in results
+
+**Code Location:** `modeling3/gen_alg_diffusion.py`
 
 ### 2.2 Quality Control Pipeline
 
@@ -567,7 +600,8 @@ base_metrics.update(adhesion_proxies)
 - **Algorithm 1 Match Rate:** ~75% (varies by parent)
 - **Algorithm 2 Match Rate:** ~75% (varies by parent)
 - **Algorithm Prime:** VAE-based generation produces novel phenotypes distinct from classical methods
-- **Conclusion:** All three algorithms produce variants that cluster with parents, with Algorithm Prime offering the most diverse generation approach
+- **Algorithm D:** Diffusion scaffold (disabled by default, not used in reported results)
+- **Conclusion:** All three active algorithms (1, 2, Prime) produce variants that cluster with parents, with Algorithm Prime offering the most diverse generation approach. Algorithm D is a scaffold for future work only.
 
 ---
 
@@ -679,6 +713,7 @@ modeling3/
 ├── preprocessing.py     # Image normalization and channel extraction
 ├── gen_alg1.py         # Algorithm 1: Classical augmentation
 ├── gen_alg2.py         # Algorithm 2: TPS warping
+├── gen_alg_diffusion.py # Algorithm D: Diffusion scaffold (disabled)
 ├── metrics.py          # Extended metrics (GLCM, alignment, etc.)
 ├── clustering.py       # K-Means, Hierarchical, Silhouette
 ├── evaluation.py       # Parent-match rate, intra-cluster distances
