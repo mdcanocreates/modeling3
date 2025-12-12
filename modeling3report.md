@@ -3,7 +3,7 @@
 
 **Author:** Michael Cano  
 **Course:** BME 4803 - Modeling 3  
-**Date:** November 2025
+**Date:** December 2025
 
 ---
 
@@ -135,6 +135,91 @@ modeling3/
 - **3D inference:** Uses biological priors rather than 3D neural network training (computationally efficient)
 
 **Code Location:** `modeling3/gen_alg_prime.py`
+
+#### Algorithm Prime Geometry (PrimeGeom): Geometry-Driven VAE (December 2025)
+
+**Rationale:** Address limitations of pixel-based VAE training by using geometry-driven synthetic data. PrimeGeom trains exclusively on fluorescence-like rendered images derived from binary masks, avoiding decoder artifacts and microscope noise that can be learned from raw pixel data.
+
+**Key Innovation:**
+- **Fluorescence Rendering Pipeline**: Converts binary segmentation masks into realistic fluorescence microscopy images using distance transforms, skeletonization, and spatial texture
+- **Clean Training Data**: VAE trains only on rendered fluorescence images (not binary blobs), ensuring the model learns realistic intensity distributions
+- **Hard Validation**: Training loader validates images are non-binary (dynamic range > 0.2, >10% unique values) before training begins
+- **Debug Infrastructure**: Overfit-one-image mode and debug training batch visualization for pipeline validation
+
+**Implementation:**
+
+1. **Geometry Bank Building**:
+   - Segments nucleus and actin from original images using Modeling 2 segmentation tools
+   - Extracts shape representations (skeleton/contour) for augmentation
+   - Saves masks to organized subdirectories (`nuc_masks/`, `cyto_masks/`)
+
+2. **Fluorescence Rendering** (`prime_geom_render.py`):
+   - **Nucleus Rendering**: Distance transform creates bright center with smooth falloff (power 0.6), simulating nucleus fluorescence
+   - **Cytoskeleton Rendering**: Combines edge maps (dilate-erode), skeleton, and distance-based core intensity (power 0.7) to simulate actin/microtubule fluorescence
+   - Adds spatial texture (Gaussian-filtered noise, σ=2.5) and blur (σ=0.8) for realistic appearance
+   - Outputs rendered images to `data/prime_geom_rendered/`
+
+3. **VAE Training with Validation**:
+   - **Dataset Validation**: Asserts images have sufficient dynamic range and unique values (prevents accidental binary mask training)
+   - **Debug Grid**: Saves 4×4 grid of training examples to `debug_train_batch.png` before epoch 1
+   - **Overfit Mode**: `--overfit-one` flag trains on single image with KL=0, TV=0, higher LR (3e-3) for 2000 steps, saves reconstructions every 200 steps
+   - Architecture: Clean decoder with bilinear upsampling (no ConvTranspose) to avoid checkerboard artifacts
+
+**Key Design Decisions:**
+- **Geometry-first approach**: Separates shape extraction from intensity rendering, allowing explicit control over training data quality
+- **Fluorescence simulation**: Rendered images mimic real microscopy appearance, enabling VAE to learn realistic intensity distributions
+- **Validation gates**: Multiple checkpoints ensure training data quality (binary detection, debug visualization)
+- **Debug-first development**: Overfit mode provides fast feedback on training pipeline correctness
+
+**Code Location:** `modeling3/alg_prime_geom.py`, `modeling3/prime_geom_render.py`, `modeling3/geom_utils_m2.py`
+
+**Status:** Implemented December 2025. **LEGACY** - Replaced by PrimeCond (conditional U-Net) to avoid posterior collapse. PrimeGeom VAE is disabled by default (`PRIME_GEOM_VAE_ENABLED = False`).
+
+#### Algorithm Prime Conditional (PrimeCond): Conditional U-Net Generator (December 2025)
+
+**Rationale:** PrimeCond replaces the PrimeGeom VAE to address posterior collapse issues. When trained on low-entropy synthetic fluorescence images, VAEs can collapse to the prior, generating gray fog or memorized examples. PrimeCond uses a conditional U-Net that directly maps geometry (masks + skeleton) to fluorescence, avoiding the latent bottleneck entirely.
+
+**Key Innovation:**
+- **Conditional Generation**: U-Net maps input geometry (3 channels: nuc_mask, cyto_mask, skeleton) directly to fluorescence output (1 channel)
+- **No Posterior Collapse**: No latent bottleneck means the model cannot ignore input information
+- **Structured Outputs**: Model learns deterministic mapping from geometry to fluorescence, ensuring realistic structured outputs
+- **Edge Loss**: L1 + 0.2×edge loss (Sobel) encourages filament sharpness
+
+**Implementation:**
+
+1. **Input Processing**:
+   - Loads masks from geometry bank (`modeling3_outputs/prime_geom_bank/masks/`)
+   - Computes skeleton from cytoskeleton mask using `skimage.morphology.skeletonize`
+   - Builds 3-channel input: [nuc_mask, cyto_mask, skeleton]
+
+2. **U-Net Architecture** (`prime_cond_model.py`):
+   - **Base channels**: 32
+   - **Depth**: 3-4 levels
+   - **Upsampling**: Bilinear (no ConvTranspose to avoid checkerboard artifacts)
+   - **Normalization**: GroupNorm
+   - **Activation**: GELU
+   - **Output**: Sigmoid
+
+3. **Training** (`gen_alg_prime_cond.py`):
+   - **Loss**: L1 reconstruction + 0.2×edge loss (Sobel)
+   - **Augmentations**: Random rotation (0/90/180/270), flip, affine warp (≤5px shift, ≤10% scale), intensity jitter on target only (gamma 0.85-1.15, gain 0.9-1.1)
+   - **Validation Split**: 80/20 by mask filenames (ensures held-out base masks)
+   - **On-the-fly generation**: Multiple augmented pairs per mask pair (10× per mask)
+
+4. **Sampling**:
+   - Samples random mask pairs from bank
+   - Applies random geometric augmentations
+   - Runs through trained U-Net to generate fluorescence
+
+**Key Design Decisions:**
+- **Conditional vs Generative**: Direct mapping avoids latent collapse, ensures structured outputs
+- **Geometry-first**: Reuses existing geometry bank and fluorescence renderer (as baseline target)
+- **Augmentation strategy**: Geometric augmentations on input/target, intensity only on target
+- **Default Algorithm Prime**: PrimeCond is now the default Prime generator (via `--prime-mode cond_unet`)
+
+**Code Location:** `modeling3/prime_cond_data.py`, `modeling3/prime_cond_model.py`, `modeling3/gen_alg_prime_cond.py`, `modeling3/README_PRIME_COND.md`
+
+**Status:** Implemented December 2025. **DEFAULT** - PrimeCond is the active Algorithm Prime generator. Legacy VAE approaches (PrimeGeom, original Prime) are available via `--prime-mode` flag but are not used in reported results.
 
 #### Algorithm D: Diffusion Model Scaffold
 
@@ -761,4 +846,5 @@ modeling3/
 ---
 
 **End of Report**
+
 
