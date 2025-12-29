@@ -2,7 +2,7 @@
 ## Endothelial Cell Generation, Metrics, and Clustering Pipeline
 
 **Author:** Michael Cano  
-**Course:** BME 4803 - Modeling 3  
+** Modeling 3  
 **Date:** December 2025
 
 ---
